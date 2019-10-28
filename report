@@ -1,5 +1,5 @@
 #! python
-# Author: Fabien Traquet
+# Author: Fab-T
 # Rev: 5/17/18 - v1.0
 # Rev: 8/17/18 - v1.1 (configfilename as argument + regexp update to consider new use cases)
 # Rev: 9/12/18 - v1.2 (enhanced regexp to consider new use cases)
