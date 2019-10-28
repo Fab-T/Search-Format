@@ -1,0 +1,380 @@
+#! python
+# Author: Fabien Traquet
+# Rev: 5/17/18 - v1.0
+# Rev: 8/17/18 - v1.1 (configfilename as argument + regexp update to consider new use cases)
+# Rev: 9/12/18 - v1.2 (enhanced regexp to consider new use cases)
+
+import sys
+import re
+import datetime
+from collections import Counter
+
+""" compare properties value exercise
+Context :   In our JEE applications, some environment properties are contained in property files (most likely with Dev 
+            environment values) While same properties value for Production environment are stored in Database.
+            I intend to extract those properties and format the content to easily compare the values... 
+            identify matches, redundancy, differences and discrepancies.    
+
+Define a function that extract properties from file Properties-ComponentName.rpt in a new format
+File : [componentName]-prod.properties
+        [componentName];propertyName;propertyValue
+Define a function that extract properties from Dev file in a new format
+File : [componentName]-dev.properties
+               [componentName];propertyName;propertyValue
+Define a function that compare 2 files and propose differences between files
+
+Here's what properties extracted from Database looks like in the Properties-ComponentName.rpt file:
+...
+ArchiveLogs;ftp.remotedir;/Access_Error_Logs/${env.COMPUTERNAME}
+...
+CRM&crm_log_level&WARN
+CRM&wls_node_server_ip&@frontend.host@
+...
+
+Here's what properties from Dev looks like:
+######################################################################################
+# logging settings
+
+log_trace_file_directory=trace
+log_record_file_directory=trace/record
+log_proxy_file_enabled=true
+...
+
+Suggested milestones for incremental development:
+ -Extract the list of Dev properties in tuple named Dev
+ -Extract the list of Prod properties in tuple named Prd
+ -Generate a result of comparing each dev property value with Prd value
+ -Generate a file containing the exact same list of Dev properties with proposed changed values
+ -Fix main() to use multiple arguments
+"""
+
+def fileread(file_read):
+    #check is filename is a string then open file to read/put lines in a single string, then close filename.
+    if isinstance(file_read,str):
+        with open(file_read,'r') as f:
+            file_string=f.read()
+            f.close()
+    else:
+        print ("filename: "+str(fileread)+" can\'t be read")
+        sys.exit(1)
+
+    return file_string
+
+def getfilename(filename):
+
+    #check if subfodler provided in filename
+    try:
+        foundsubfolder=filename.rfind("/")
+        extracted_filename=filename[foundsubfolder+1:]
+    except ValueError:
+        extracted_filename=filename
+
+    return extracted_filename
+
+
+def getshortfilename(filename):
+
+    #Extract filename from folder (if exists)
+    f=getfilename(filename)
+
+    file,fileExtension = str(f).split(".",1)
+
+    return file
+
+def checkduplicates(filename):
+
+    #readfilename into list and warn if duplicate entries
+
+    text=fileread(filename)
+    texttoline=text.splitlines()
+    duplicates = []
+
+    counter = Counter(texttoline)
+
+    for line in texttoline:
+        try:
+            if not line.lstrip().startswith('#'):
+                name,value=line.split("=",1)
+                #check if exact same line exists
+                occurrence=counter[line]
+                if occurrence > 1:
+                    if not line in duplicates: duplicates.append(line)
+                #check if property name is defined twice with different values
+                occurrenceName=counter[name]
+                if occurrenceName > 1:
+                    #if not line in duplicates: duplicates.append(line)
+                    duplicates.append(line)
+
+        except ValueError:
+            #that's ok, not a property, need to do something anyway: true statement
+            line in texttoline
+
+    if duplicates:
+        sys.exit("####\n Filename \'"+filename+"\' contains duplicate entries : \n"+str(duplicates)+ \
+                 "\n\n !!! Please remove the duplicates !!!")
+
+def update_file(filename,input):
+    """
+    Create a new file with new values from an input list
+    :param filename: name of the file to update
+    :param input: list of new elements to insert
+
+    This function replace each pair property=value with new values if needed.
+    We keep the exact same format of the file to ease the compare with BeyondCompare
+
+    """
+    #make sure to extract the filename and not folders
+    justthefile=getfilename(filename)
+
+    newfilename="newproperties/new_"+justthefile
+    f=open(newfilename,'w')
+
+    text=fileread(filename)
+    texttoline=text.splitlines()
+    #start with first item in input : index=0
+    index=0
+
+    for line in texttoline:
+        #we parse each line of filename for a property to set
+        try:
+            if not line.lstrip().startswith('#'):
+                name,value=line.split("=",1)
+                # if property = value found : we need to set the new value
+                newline=input[index]
+                #we increment to next item in input
+                index+=1
+            else:
+                newline=line
+
+        except Exception:
+            #there was a problem keep same line
+            newline=line
+            continue
+        finally:
+            f.write(newline+'\n')
+
+    f.close()
+
+def extract_from_properties(filename):
+    """
+    create a list of propertyname:propertyvalues from properties files
+    in order to match them with the one extracted from the Properties DB
+    """
+
+    #Having duplicates within properties files is not correct
+    #This function checks for you and exit if duplicates found !
+    checkduplicates(filename)
+
+
+    text=fileread(filename)
+
+    #Get the filename without extension
+    shortfilename=getshortfilename(filename)
+
+    #defining the regexp
+    #Need to define text as multiline to use ^ and ignore commented prop in files
+    myRegexp=re.compile('^[-_. \w ]*=[ <!-?$@_.> \\:\/{}*\w]*', re.MULTILINE)
+
+    #properties line is a tuple:
+    propertylines = re.findall(myRegexp, text)
+    #debug
+    #print("Debug propertyLines"+str(propertylines))
+
+    #create a list for Dev properties
+    Listresult = []
+    for propertyline in propertylines:
+        propertyname,propertyvalue = propertyline.split("=",1)
+        Listresult.append([shortfilename,propertyname,propertyvalue])
+
+    #create a tuple (immutable) from list
+    result=tuple(Listresult)
+
+    return result
+
+def extract_from_DB(DBExtractfile):
+    """
+
+    :param DBExtractfile: name of the file containing properties values from DB
+    :param name: property to find
+    :return: list of property with values from Prod (DBExtractFile)
+    """
+
+    text=fileread(DBExtractfile)
+
+    #properties line is a tuple:
+    propertylines = re.findall(r'[-_.\w]*&[-_.\w]*&[<!-?$@\/_.=&> :\/{}*\\\w]*', text)
+    #debug
+    #print("Debug DBPropertyLines"+str(propertylines))
+
+    #create a list of DB properties
+    Listresult = []
+
+    for propertyline in propertylines:
+        shortfilename,propertyname,propertyvalue = propertyline.split("&",2)
+        Listresult.append([shortfilename,propertyname,propertyvalue])
+
+    #create a tuple (immutable) from list
+    result=tuple(Listresult)
+    #Debug
+    #print(Listresult)
+
+    return result
+
+def generate_result(DevTuple,PrdTuple,filename):
+
+    #now = datetime.datetime.now()
+    resulttosumlist = []
+    #resulttofilelist = ['### created on ='+now.strftime("%Y-%m-%d %H:%M")+'###']
+    resulttofilelist = []
+
+    #Inner functions
+
+    def buildresulttofile(thisindex,thistuple):
+
+        thisitem = thistuple[thisindex][1]+"="+thistuple[thisindex][2]
+        #Check if item already exists in List before inserting
+        if not thisitem in resulttofilelist:
+            #Item (prop+value) does not exist: Use case 2 & 3
+            #Check if lastitem is same prop but with different value
+            #Prevent issue with pop on empty list
+            if resulttofilelist:
+                lastitem=resulttofilelist.pop()
+                #debug
+                #print("Debug here is the lastitem :" +lastitem)
+
+                lastitemname,lastitemvalue=lastitem.split("=",1)
+                #check prop is the same
+                if lastitemname == thistuple[thisindex][1]:
+                    #lastitem property is identical : replace with new value
+                    resulttofilelist.append(thisitem)
+                else:
+                    #lastitem property is different : insert a new item
+                    #Because of pop() - recreating last element -
+                    resulttofilelist.append(lastitem)
+                    #insert new element
+                    resulttofilelist.append(thisitem)
+            else:
+                #insert new element on empty list
+                resulttofilelist.append(thisitem)
+        else:
+            #Item is already present: Use case 1
+            print("item "+thisitem+" is already present in list")
+
+        return resulttofilelist
+
+    def buildresulttosum(thisindex,thistuple,thisflag):
+
+        if thisflag:
+            resulttosumlist.append(thisflag+" : "+thistuple[thisindex][1]+"="+thistuple[thisindex][2])
+        else:
+            resulttosumlist.append(thistuple[thisindex][0]+" : "+thistuple[thisindex][1]+"=" \
+                                   +thistuple[thisindex][2])
+
+        return resulttosumlist
+
+
+    def compare_item(DevItem,PrdItem):
+
+        if DevTuple[DevItem][2] == PrdTuple[PrdItem][2]:
+            #Use case 2 Prd value is different from Dev
+            isdevitem = True
+        else:
+            #Use case 3 Prd value is different from Dev
+            isdevitem = False
+
+        return isdevitem
+
+
+    #Get all PropertyName from DevTuple (Dev properties)
+    index=0
+    while index < len(DevTuple):
+        tofind=DevTuple[index][1].replace(" ","")
+        #debug
+        #if tofind == "product_url":
+        #    print ("debug string to find:"+tofind)
+
+        newindex=0
+        propnotfound = True
+        while newindex < len(PrdTuple):
+            if tofind == PrdTuple[newindex][1]:
+                propnotfound = False
+                resulttofilelist=buildresulttofile(newindex,PrdTuple)
+
+            #debug
+            #if PrdTuple[newindex][1] == "product_url":
+            #    print ("debug PrdTuple searched:"+PrdTuple[newindex][2])
+
+            newindex+=1
+        #Use case 4 : Dev property not found in Prod properties
+        if propnotfound:
+            #Set value to Dev
+            resulttofilelist=buildresulttofile(index,DevTuple)
+            #Warn within Summary
+            resulttosumlist=buildresulttosum(index,DevTuple,"WARNING")
+
+        index+=1
+
+    print("this is resulttofilelist:")
+    print (resulttofilelist)
+    print("this is resulttosumlist:")
+    print(resulttosumlist)
+    #Generate new property file
+    update_file(filename,resulttofilelist)
+
+
+
+def main():
+    # This command-line parsing code is provided.
+    # Make a list of command line arguments, omitting the [0] element
+    # which is the script itself.
+    args = sys.argv[1:]
+
+
+    if not args:
+        print('usage: [--job filename] [--summary] file [file ...]')
+        sys.exit(1)
+
+    # Notice the job flag and remove it from args if it is present.
+    configfilename = ''
+    if args[0] == '--job':
+        configfilename = args[1]
+        del args[:2]
+
+    # Notice the summary flag and remove it from args if it is present.
+    summary = False
+    if args[0] == '--summary':
+        summary = True
+        del args[0]
+
+    index=0
+
+    #debug
+    print('configfilename '+configfilename)
+    print('propertyfilename '+args[0] )
+
+    while index < len(args):
+        if summary:
+            filename="summary_"+args[index]
+            f=open(filename,'w')
+            myList=extract_from_properties(args[index])
+            for item in myList:
+                if item:
+                    f.write(str(item)+'\n')
+            f.close()
+        else:
+            mydevPropTuple=extract_from_properties(args[index])
+            #print(mydevPropTuple)
+
+            myprodPropTuple=extract_from_DB(configfilename)
+            #print(myprodPropTuple)
+
+            generate_result(mydevPropTuple,myprodPropTuple,args[index])
+            #print(myResult)
+
+        index+=1
+
+    # For each filename, get the names, then either print the text output
+    # or write it to a summary file
+
+if __name__ == '__main__':
+    main()
